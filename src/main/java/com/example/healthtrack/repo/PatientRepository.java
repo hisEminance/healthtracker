@@ -12,48 +12,33 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 
 
+//UPD: здаю цю тестову таску другий раз, і сподіваюсь це буде прочитано.
+// Хочу зауважити, що я дуже переоцінив свої знання бд та sql загалом. Під час виконання мені доводилось неодноразово питати в нейромережі, що і як, неодноразово переробляти запити, тому, що я не знаю JPQL.
+// І навіть зараз, коли роботи та правки виконані, я знаю, що я швидше за все зробив недостатньо і можна оптимізувати ще.
+// Я не додав індекси, я міг би детальніше та глибше вникнути в суть Executor Servicе та нормалізувати бд. Також ймовірніше за все можна якось ще краще оптимізувати VisitRepository.
+// В будь-якому разі, цей процес допоміг мені розширити знання, і я задоволений результатом. Дякую за фідбек!
 
-//Насправді це було дуже важко, я ніколи не оптимізовував запити в бд і користувався звичайнийми запитами від JpaRepository, по типу save();
-//за допомогою пари статєйок і гпт я зрозумів, що оптимізовувати найкраще просто пишучи кастомні запити в самому репозиторії, не знаю, наскільки це вийшло, але сподіваюсь, що данний розв'язок підійде.
 @Repository
 public interface PatientRepository extends JpaRepository<Patient, Long> {
 
-    //пошук пацієнтів з фільтрацією по параметру search, якщо не переданий, то ігноруємо його, якщо переданий то ->
-    //шукаємо ім'я по частковому збігу (like) і перевіряємо
-    //чи у пацієнта є хоча б один візит до одного з лікарів у списку doctorIds
-    //remarka: запит фільтрує лише тих пацієнтів, які хоча б раз були у вказаних лікарів
+    // переписав на джойн, краще підходить, якщо ми говоримо про велику к-сть данних
+    // адже в попередньому варіанті для кожного запису проводилась перевірка, що займало більше часу
+    // пояснення: звичайний джойн, приєднюємо таблицю візитів до пацієнтів, щоб знайти пацієнтів з візитами
+    // select distinct дозволяє уникнути дублювання, у випадках коли один пацієнт має кілька візитів
+    // по умові where знаходимо пацієнтів по прізвищу за допомогю like
+    // і перевіряється чи параметр doctorIDs нуль чи співпадає ідентифікатор лікаря з переданими значеннями.
+    // повертаємо результат у вигляді сторінки (підказав гпт, я чесно не знав, що взагалі таке існує xD)
     @Query("""
-        SELECT p FROM Patient p 
-        WHERE (:search IS NULL OR LOWER(p.firstName) LIKE LOWER(CONCAT('%', :search, '%')) 
-                              OR LOWER(p.lastName) LIKE LOWER(CONCAT('%', :search, '%')))
-        AND (:doctorIds IS NULL OR EXISTS (
-            SELECT 1 FROM Visit v WHERE v.patient.id = p.id AND v.doctor.id IN :doctorIds
-        ))
-    """)
+    SELECT DISTINCT p FROM Patient p 
+    LEFT JOIN p.visits v 
+    WHERE (:search IS NULL OR LOWER(p.firstName) LIKE LOWER(CONCAT('%', :search, '%')) 
+          OR LOWER(p.lastName) LIKE LOWER(CONCAT('%', :search, '%')))
+      AND (:doctorIds IS NULL OR v.doctor.id IN :doctorIds)
+""")
     Page<Patient> searchPatients(
             @Param("search") String search,
             @Param("doctorIds") List<Long> doctorIds,
             Pageable pageable
     );
 
-    //для кожного пацієнта і лікаря вибираємо останній візит, шукаємо для певного пацієнту, групуємо лікарів і пацієнтів.
-    @Query("""
-        SELECT v.patient.id, v.doctor.id, MAX(v.startDateTime) 
-        FROM Visit v 
-        WHERE v.patient.id IN :patientIds
-        GROUP BY v.patient.id, v.doctor.id
-    """)
-    List<Object[]> findLatestVisitsByPatients(@Param("patientIds") List<Long> patientIds);
-
-
-    //Замість того, щоб вираховувати кількість пацієнтів у коді (повільно)
-    //ми відразу отримуємо результат з БД шляхом підрахунку для кожного лікаря унікальних пацієнтів
-    // потім шукаємо для певного лікаря і групуємо по лікарях
-    @Query("""
-        SELECT v.doctor.id, COUNT(DISTINCT v.patient.id) 
-        FROM Visit v 
-        WHERE v.doctor.id IN :doctorIds
-        GROUP BY v.doctor.id
-    """)
-    List<Object[]> countUniquePatientsPerDoctor(@Param("doctorIds") List<Long> doctorIds);
 }
